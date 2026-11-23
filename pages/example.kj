@@ -1,0 +1,29 @@
+import http
+import task
+
+type Shape = {
+    Circle(radius: decimal)
+    Square(side: decimal)
+}
+
+function area(shape: Shape): decimal {
+    return match (shape) {
+        Circle(radius) => 3.14 * radius * radius
+        Square(side) => side * side
+    }
+}
+
+// Errors are values: `?` passes them on.
+function half(text: string): Result[int, ParseError] {
+    immut n = int(text)?
+    return Ok(n / 2)
+}
+
+print(area(Circle(2)), area(Square(1.5)), 0.1 + 0.2) // 12.56 2.25 0.3
+print(half('42'), half('x')) // Ok(21) Err(InvalidNumber('x'))
+
+// Requests at the same time, on one thread.
+immut pages = task.all([
+    () => http.get('https://example.com'),
+    () => http.get('https://example.org'),
+])

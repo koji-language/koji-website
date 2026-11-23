@@ -1,0 +1,62 @@
+# Builds the site with the last release of Koji (its compiler, and the documentation of its tag), and
+# publishes it with GitHub Pages. It runs for each push to main, and by hand after a release of Koji
+# (Actions, Pages, Run workflow), to publish the documentation of the new version.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The last release of Koji, and its repository at its tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The last release, previews included (gh release view leaves them out).
+          tag=$(gh release list --repo koji-language/koji --limit 1 --json tagName --jq '.[0].tagName')
+          echo "Koji $tag"
+          gh release download "$tag" --repo koji-language/koji --pattern "koji-*-linux-x64.tar.gz" --dir "$RUNNER_TEMP"
+          tar -xzf "$RUNNER_TEMP"/koji-*-linux-x64.tar.gz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/koji-${tag#v}-linux-x64" >> "$GITHUB_PATH"
+          git clone --quiet --depth 1 --branch "$tag" https://github.com/koji-language/koji "$RUNNER_TEMP/koji"
+
+      - name: Tests
+        run: kojic test src
+
+      - name: The site
+        run: kojic run src/site.kj "$RUNNER_TEMP/koji" site
+
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
+        with:
+          path: site
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

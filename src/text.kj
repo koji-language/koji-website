@@ -1,0 +1,21 @@
+// What the other files of the generator need of text.
+
+// The text as HTML: `<`, `>`, `&` and `"` written as entities.
+export function escape(text: string): string {
+    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+}
+
+// The characters of `chars` from `start` to `end` (excluded), as a string.
+export function part(chars: char[], start: int, end: int): string {
+    mut text = ''
+
+    for i in range(start, end) {
+        text += string(chars[i])
+    }
+
+    return text
+}
+
+test 'escape' {
+    assert(escape('<a href="x">&</a>') == '&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt;')
+}

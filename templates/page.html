@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<meta name="description" content="Koji is a statically typed language that aims to be simple, readable and fast, compiled to machine code by a compiler written in Koji.">
+<link rel="icon" href="{{root}}favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="{{root}}style.css">
+</head>
+<body class="{{kind}}">
+<header class="site-header">
+<a class="brand" href="{{root}}index.html"><img src="{{root}}favicon.svg" alt="" width="26" height="26">Koji</a>
+<nav class="site-nav">{{header}}</nav>
+</header>
+<div class="layout">
+<aside class="sidebar">
+{{navigation}}
+</aside>
+<main class="content">
+<details class="mobile-nav">
+<summary>Contents</summary>
+{{navigation}}
+</details>
+<article>
+{{content}}
+</article>
+<nav class="pager">{{pager}}</nav>
+<p class="edit">{{edit}}</p>
+</main>
+<aside class="contents">
+{{contents}}
+</aside>
+</div>
+<footer class="site-footer">Koji {{version}} · <a href="https://github.com/koji-language/koji">GitHub</a> · Apache License 2.0</footer>
+</body>
+</html>

@@ -1,0 +1,805 @@
+// Markdown to HTML: the part of CommonMark, with the tables and the alerts of GitHub, that the
+// documentation of Koji uses. HTML written in the text is shown as text, never passed through.
+// The ids of the headings are made as GitHub makes them, so the links written for GitHub work.
+
+import { highlight } from 'highlight.kj'
+import { escape, part } from 'text.kj'
+
+export type Heading = {
+    level: int
+    // Its text, without the marks of Markdown.
+    text: string
+    id: string
+}
+
+export type Document = {
+    html: string
+    // The text of the first heading of level 1 ('' without one).
+    title: string
+    headings: Heading[]
+}
+
+// The headings met so far, and how many times each id was given (the second `Example` of a page
+// is `example-1`, as on GitHub).
+type Headings = {
+    found: Heading[]
+    ids: Map[string, int]
+}
+
+// A marker of an item of a list: `-   ` or `1. `, after `indent` spaces; the text of the item
+// starts at `width`.
+type Marker = {
+    indent: int
+    ordered: boolean
+    number: int
+    width: int
+}
+
+// The HTML of `text`, with each destination of a link given by `link` (from the destination as
+// written).
+export function render(text: string, link: (string) => string): Document {
+    mut headings: Headings = { found: [], ids: [:] }
+    immut html = blocks(text.replace('\t', '    ').split('\n'), false, link, mut headings)
+    mut title = ''
+
+    for heading in headings.found {
+        if (heading.level == 1 and title == '') { title = heading.text }
+    }
+
+    return { html: html, title: title, headings: headings.found }
+}
+
+function indentOf(line: string): int {
+    mut count = 0
+
+    for c in line {
+        if (c != ' ') { return count }
+
+        count += 1
+    }
+
+    return count
+}
+
+function isBlank(line: string): boolean {
+    return line.trim() == ''
+}
+
+// The language of the fence of code that `line` opens (`koji` for ```koji), if it opens one.
+function fence(line: string): Option[string] {
+    immut trimmed = line.trim()
+
+    if (trimmed.startsWith('```')) { return Some(trimmed[3..].trim()) }
+
+    return None
+}
+
+// The level of the heading `line` is (0 when it is not one).
+function headingLevel(line: string): int {
+    mut level = 0
+
+    for c in line {
+        if (c != '#') { return if (level <= 6 and line.length() > level and line[level] == ' ') { level } else { 0 } }
+
+        level += 1
+    }
+
+    return 0
+}
+
+function isRule(line: string): boolean {
+    immut trimmed = line.trim()
+    return trimmed == '---' or trimmed == '***' or trimmed == '___'
+}
+
+function isQuote(line: string): boolean {
+    return indentOf(line) < 4 and line.trim().startsWith('>')
+}
+
+function marker(line: string): Option[Marker] {
+    immut indent = indentOf(line)
+    immut chars = line.chars()
+
+    if (indent >= chars.length()) { return None }
+
+    immut c = chars[indent]
+    mut after = 0
+    mut ordered = false
+    mut number = 0
+
+    if (c == '-' or c == '*' or c == '+') { after = indent + 1 }
+
+    if (c >= '0' and c <= '9') {
+        mut end = indent
+
+        while (end < chars.length() and chars[end] >= '0' and chars[end] <= '9') {
+            number = number * 10 + chars[end].code() - 48
+            end += 1
+        }
+
+        if (end < chars.length() and (chars[end] == '.' or chars[end] == ')')) {
+            after = end + 1
+            ordered = true
+        }
+    }
+
+    if (after == 0) { return None }
+
+    // The marker is followed by a space, or ends the line.
+    if (after < chars.length() and chars[after] != ' ') { return None }
+
+    mut width = after
+
+    while (width < chars.length() and chars[width] == ' ') {
+        width += 1
+    }
+
+    if (width == chars.length()) { width = after + 1 }
+
+    return Some({ indent: indent, ordered: ordered, number: number, width: width })
+}
+
+// Whether `lines[i]` is the first line of a table: a row, followed by the row of `---` under its
+// header.
+function startsTable(lines: string[], i: int): boolean {
+    if (not lines[i].trim().startsWith('|') or i + 1 >= lines.length()) { return false }
+
+    immut next = lines[i + 1].trim()
+
+    if (not next.startsWith('|') or next.indexOf('-') is None) { return false }
+
+    for c in next {
+        if (c != '|' and c != '-' and c != ':' and c != ' ') { return false }
+    }
+
+    return true
+}
+
+// Whether `lines[i]` starts a block that ends a paragraph before it.
+function interrupts(lines: string[], i: int): boolean {
+    immut line = lines[i]
+
+    if (fence(line) is Some or headingLevel(line.trim()) > 0 or isRule(line) or isQuote(line) or startsTable(lines, i)) { return true }
+
+    return match (marker(line)) {
+        // A list ends a paragraph if it is not empty and, ordered, starts at 1 (as in CommonMark).
+        Some(found) => not isBlank(line[found.width..]) and (not found.ordered or found.number == 1)
+        None => false
+    }
+}
+
+// `line` without its first `count` spaces (all of them, where it has fewer).
+function dedent(line: string, count: int): string {
+    immut indent = indentOf(line)
+    return line[if (indent < count) { indent } else { count }..]
+}
+
+// The cells of a row of a table: between the `|`, but those in code or after a `\`.
+function cells(row: string): string[] {
+    mut text = row.trim()
+
+    if (text.startsWith('|')) { text = text[1..] }
+
+    if (text.endsWith('|') and not text.endsWith('\\|')) { text = text[0..text.length() - 1] }
+
+    mut found: string[] = []
+    mut cell = ''
+    mut inCode = false
+    mut escaped = false
+
+    for c in text {
+        if (c == '|' and not inCode and not escaped) {
+            found.push(cell.trim())
+            cell = ''
+            continue
+        }
+
+        if (c == '`') { inCode = not inCode }
+
+        escaped = c == '\\' and not escaped
+        cell += string(c)
+    }
+
+    found.push(cell.trim())
+    return found
+}
+
+function table(rows: string[], link: (string) => string): string {
+    mut aligns: string[] = []
+
+    for cell in cells(rows[1]) {
+        immut left = cell.startsWith(':')
+        immut right = cell.endsWith(':')
+        aligns.push(if (left and right) { 'center' } else { if (right) { 'right' } else { if (left) { 'left' } else { '' } } })
+    }
+
+    function row(cellsOf: string[], tag: string): string {
+        mut html = '<tr>'
+
+        for i in range(cellsOf.length()) {
+            immut align = if (i < aligns.length() and aligns[i] != '') { ` style="text-align: ${aligns[i]}"` } else { '' }
+            html += `<${tag}${align}>${inline(cellsOf[i].replace('\\|', '|'), link)}</${tag}>`
+        }
+
+        return html + '</tr>\n'
+    }
+
+    mut html = `<div class="table"><table>\n<thead>\n${row(cells(rows[0]), 'th')}</thead>\n<tbody>\n`
+
+    for i in range(2, rows.length()) {
+        html += row(cells(rows[i]), 'td')
+    }
+
+    return html + '</tbody>\n</table></div>\n'
+}
+
+// The text of HTML, without its tags and with its entities as the characters they are.
+function textOf(html: string): string {
+    mut text = ''
+    mut inTag = false
+
+    for c in html {
+        if (c == '<') { inTag = true }
+
+        if (not inTag) { text += string(c) }
+
+        if (c == '>') { inTag = false }
+    }
+
+    return text.replace('&lt;', '<').replace('&gt;', '>').replace('&quot;', '"').replace('&amp;', '&')
+}
+
+// The id GitHub gives a heading of text `text`: in lower case, with letters, digits, `-` and `_`
+// only, and `-` for each space.
+export function slug(text: string): string {
+    mut id = ''
+
+    for c in text.lower() {
+        if (c == ' ') {
+            id += '-'
+            continue
+        }
+
+        immut letter = string(c)
+
+        if (c == '-' or c == '_' or letter.isAlphaNumeric()) { id += letter }
+    }
+
+    return id
+}
+
+// The blocks of `lines` as HTML. In a tight list (`tight`), paragraphs are not put in `<p>`.
+function blocks(lines: string[], tight: boolean, link: (string) => string, mut headings: Headings): string {
+    mut html = ''
+    mut i = 0
+
+    while (i < lines.length()) {
+        immut line = lines[i]
+
+        if (isBlank(line)) {
+            i += 1
+            continue
+        }
+
+        // Code: highlighted if it is Koji's.
+        match (fence(line)) {
+            Some(language) => {
+                immut indent = indentOf(line)
+                mut code: string[] = []
+                i += 1
+
+                while (i < lines.length() and fence(lines[i]) is None) {
+                    code.push(dedent(lines[i], indent))
+                    i += 1
+                }
+
+                i += 1
+                immut text = code.join('\n')
+                immut colored = if (language == 'koji') { highlight(text) } else { escape(text) }
+                immut attribute = if (language == '') { '' } else { ` class="language-${escape(language)}"` }
+                html += `<pre><code${attribute}>${colored}</code></pre>\n`
+                continue
+            }
+            None => {}
+        }
+
+        immut level = headingLevel(line.trim())
+
+        if (level > 0) {
+            mut content = line.trim()[level..].trim()
+
+            // Closing `#`s, if any.
+            while (content.endsWith('#')) {
+                content = content[0..content.length() - 1]
+            }
+
+            immut inner = inline(content.trim(), link)
+            immut text = textOf(inner)
+            mut id = slug(text)
+            immut times = match (headings.ids.get(id)) {
+                Some(count) => count
+                None => 0
+            }
+            headings.ids[id] = times + 1
+
+            if (times > 0) { id = `${id}-${times}` }
+
+            headings.found.push({ level: level, text: text, id: id })
+            html += `<h${level} id="${id}"><a class="anchor" href="#${id}" aria-hidden="true">#</a>${inner}</h${level}>\n`
+            i += 1
+            continue
+        }
+
+        if (isRule(line)) {
+            html += '<hr>\n'
+            i += 1
+            continue
+        }
+
+        if (isQuote(line)) {
+            mut quoted: string[] = []
+
+            while (i < lines.length() and not isBlank(lines[i]) and (isQuote(lines[i]) or not interrupts(lines, i))) {
+                mut text = lines[i].trim()
+
+                if (text.startsWith('>')) { text = text[1..] }
+
+                if (text.startsWith(' ')) { text = text[1..] }
+
+                quoted.push(text)
+                i += 1
+            }
+
+            // An alert of GitHub: `> [!WARNING]` on its first line.
+            immut first = quoted[0].trim()
+
+            if (first.startsWith('[!') and first.endsWith(']')) {
+                immut kind = first[2..first.length() - 1].lower()
+                immut name = kind[0..1].upper() + kind[1..]
+                html += `<div class="alert alert-${escape(kind)}"><p class="alert-title">${escape(name)}</p>\n${blocks(quoted[1..], false, link, mut headings)}</div>\n`
+                continue
+            }
+
+            html += `<blockquote>\n${blocks(quoted, false, link, mut headings)}</blockquote>\n`
+            continue
+        }
+
+        if (startsTable(lines, i)) {
+            mut rows: string[] = []
+
+            while (i < lines.length() and lines[i].trim().startsWith('|')) {
+                rows.push(lines[i])
+                i += 1
+            }
+
+            html += table(rows, link)
+            continue
+        }
+
+        match (marker(line)) {
+            Some(first) => {
+                mut current = first
+                mut items: string[][] = []
+                mut item = [line[first.width..]]
+                // Whether a blank line separates items, or blocks of an item: then the list is
+                // loose, and its paragraphs are in `<p>`.
+                mut loose = false
+                mut blank = false
+                i += 1
+
+                while (i < lines.length()) {
+                    immut next = lines[i]
+
+                    if (isBlank(next)) {
+                        item.push('')
+                        blank = true
+                        i += 1
+                        continue
+                    }
+
+                    if (indentOf(next) >= current.width) {
+                        if (blank) { loose = true }
+
+                        item.push(next[current.width..])
+                        blank = false
+                        i += 1
+                        continue
+                    }
+
+                    immut another = match (marker(next)) {
+                        Some(found) => if (found.indent == first.indent and found.ordered == first.ordered) { Some(found) } else { None }
+                        None => None
+                    }
+
+                    if (another is Some) {
+                        match (another) {
+                            Some(found) => current = found
+                            None => {}
+                        }
+
+                        if (blank) { loose = true }
+
+                        items.push(item)
+                        item = [next[current.width..]]
+                        blank = false
+                        i += 1
+                        continue
+                    }
+
+                    // A line of the paragraph of the item, not indented ("lazy").
+                    if (not blank and not interrupts(lines, i)) {
+                        item.push(next.trim())
+                        i += 1
+                        continue
+                    }
+
+                    break
+                }
+
+                items.push(item)
+                immut tag = if (first.ordered) { 'ol' } else { 'ul' }
+                immut start = if (first.ordered and first.number != 1) { ` start="${first.number}"` } else { '' }
+                html += `<${tag}${start}>\n`
+
+                for lines in items {
+                    // The blank lines at its end do not make the list loose.
+                    mut content = lines
+
+                    while (content.length() > 0 and isBlank(content[content.length() - 1])) {
+                        content.pop()
+                    }
+
+                    html += `<li>${blocks(content, not loose, link, mut headings).trim()}</li>\n`
+                }
+
+                html += `</${tag}>\n`
+                continue
+            }
+            None => {}
+        }
+
+        // A paragraph: its lines up to a blank one, or to a block.
+        mut paragraph: string[] = [line.trim()]
+        mut breaks: boolean[] = [line.endsWith('  ')]
+        i += 1
+
+        while (i < lines.length() and not isBlank(lines[i]) and not interrupts(lines, i)) {
+            paragraph.push(lines[i].trim())
+            breaks.push(lines[i].endsWith('  '))
+            i += 1
+        }
+
+        mut text = ''
+
+        for j in range(paragraph.length()) {
+            text += inline(paragraph[j], link)
+
+            if (j + 1 < paragraph.length()) { text += if (breaks[j]) { '<br>\n' } else { '\n' } }
+        }
+
+        html += if (tight) { `${text}\n` } else { `<p>${text}</p>\n` }
+    }
+
+    return html
+}
+
+function isWordChar(c: char): boolean {
+    return string(c).isAlphaNumeric()
+}
+
+function isPunctuation(c: char): boolean {
+    return c.code() > 32 and c.code() < 127 and not isWordChar(c)
+}
+
+// Where the run of exactly `count` backticks after `start` starts (-1 if there is none).
+function closingTicks(chars: char[], start: int, count: int): int {
+    mut i = start
+
+    while (i < chars.length()) {
+        if (chars[i] != '`') {
+            i += 1
+            continue
+        }
+
+        mut end = i
+
+        while (end < chars.length() and chars[end] == '`') {
+            end += 1
+        }
+
+        if (end - i == count) { return i }
+
+        i = end
+    }
+
+    return -1
+}
+
+// Where `delimiter` (`*`, `**`, `_` or `__`) closes the emphasis it opens at `start` (-1 if it
+// does not): not after a space, and, for `_`, not inside a word.
+function closingEmphasis(chars: char[], start: int, delimiter: string): int {
+    immut size = delimiter.length()
+    immut mark = delimiter.chars()[0]
+    mut i = start + size + 1
+
+    while (i + size <= chars.length()) {
+        if (chars[i] == '`') {
+            // Code is not searched.
+            mut count = 0
+
+            while (i + count < chars.length() and chars[i + count] == '`') {
+                count += 1
+            }
+
+            immut close = closingTicks(chars, i + count, count)
+            i = if (close < 0) { i + count } else { close + count }
+            continue
+        }
+
+        mut matches = true
+
+        for k in range(size) {
+            if (chars[i + k] != mark) { matches = false }
+        }
+
+        // The run is exactly the delimiter (`*` does not close at `**`), after a character that is
+        // not a space.
+        immut before = i + size < chars.length() and chars[i + size] == mark
+        immut longer = before or (i > 0 and chars[i - 1] == mark)
+
+        if (matches and not longer and chars[i - 1] != ' ' and (mark != '_' or i + size >= chars.length() or not isWordChar(chars[i + size]))) { return i }
+
+        i += 1
+    }
+
+    return -1
+}
+
+// Where the `]` that closes the `[` at `start` is (-1 if none does).
+function closingBracket(chars: char[], start: int): int {
+    mut depth = 0
+    mut i = start
+
+    while (i < chars.length()) {
+        immut c = chars[i]
+
+        if (c == '\\') {
+            i += 2
+            continue
+        }
+
+        if (c == '`') {
+            mut count = 0
+
+            while (i + count < chars.length() and chars[i + count] == '`') {
+                count += 1
+            }
+
+            immut close = closingTicks(chars, i + count, count)
+            i = if (close < 0) { i + count } else { close + count }
+            continue
+        }
+
+        if (c == '[') { depth += 1 }
+
+        if (c == ']') {
+            depth -= 1
+
+            if (depth == 0) { return i }
+        }
+
+        i += 1
+    }
+
+    return -1
+}
+
+// Where the `)` that closes the `(` at `start` is (-1 if none does on the line).
+function closingParen(chars: char[], start: int): int {
+    mut depth = 0
+
+    for i in range(start, chars.length()) {
+        if (chars[i] == '(') { depth += 1 }
+
+        if (chars[i] == ')') {
+            depth -= 1
+
+            if (depth == 0) { return i }
+        }
+
+        if (chars[i] == ' ' and depth == 1) { return -1 }
+    }
+
+    return -1
+}
+
+// Where an address that starts at `start` ends: before a space or `<`, and before the punctuation
+// that ends a sentence.
+function urlEnd(chars: char[], start: int): int {
+    mut end = start
+
+    while (end < chars.length() and chars[end] != ' ' and chars[end] != '<' and chars[end] != '>') {
+        end += 1
+    }
+
+    while (end > start and (chars[end - 1] == '.' or chars[end - 1] == ',' or chars[end - 1] == ':' or chars[end - 1] == ';' or chars[end - 1] == ')' or chars[end - 1] == '!' or chars[end - 1] == '?')) {
+        end -= 1
+    }
+
+    return end
+}
+
+function startsWithAt(chars: char[], start: int, text: string): boolean {
+    immut wanted = text.chars()
+
+    if (start + wanted.length() > chars.length()) { return false }
+
+    for k in range(wanted.length()) {
+        if (chars[start + k] != wanted[k]) { return false }
+    }
+
+    return true
+}
+
+// The text of a line of Markdown as HTML: code, emphasis, links and addresses.
+export function inline(text: string, link: (string) => string): string {
+    immut chars = text.chars()
+    mut html = ''
+    mut i = 0
+
+    while (i < chars.length()) {
+        immut c = chars[i]
+
+        if (c == '\\' and i + 1 < chars.length() and isPunctuation(chars[i + 1])) {
+            html += escape(string(chars[i + 1]))
+            i += 2
+            continue
+        }
+
+        if (c == '`') {
+            mut count = 0
+
+            while (i + count < chars.length() and chars[i + count] == '`') {
+                count += 1
+            }
+
+            immut close = closingTicks(chars, i + count, count)
+
+            if (close < 0) {
+                html += part(chars, i, i + count)
+                i += count
+                continue
+            }
+
+            mut code = part(chars, i + count, close)
+
+            // One space at both ends is taken away, for code that starts or ends with a backtick.
+            if (code.length() > 2 and code.startsWith(' ') and code.endsWith(' ') and not code.isSpace()) { code = code[1..code.length() - 1] }
+
+            html += `<code>${escape(code)}</code>`
+            i = close + count
+            continue
+        }
+
+        if (c == '*' or c == '_') {
+            immut double = i + 1 < chars.length() and chars[i + 1] == c
+            immut delimiter = if (double) { string(c) + string(c) } else { string(c) }
+            immut size = delimiter.length()
+            immut opens = i + size < chars.length() and chars[i + size] != ' ' and (c == '*' or i == 0 or not isWordChar(chars[i - 1]))
+            immut close = if (opens) { closingEmphasis(chars, i, delimiter) } else { -1 }
+
+            if (close > 0) {
+                immut tag = if (double) { 'strong' } else { 'em' }
+                html += `<${tag}>${inline(part(chars, i + size, close), link)}</${tag}>`
+                i = close + size
+                continue
+            }
+
+            html += delimiter
+            i += size
+            continue
+        }
+
+        if (c == '[') {
+            immut close = closingBracket(chars, i)
+
+            if (close > 0 and close + 1 < chars.length() and chars[close + 1] == '(') {
+                immut end = closingParen(chars, close + 1)
+
+                if (end > 0) {
+                    immut destination = part(chars, close + 2, end).trim()
+                    html += `<a href="${escape(link(destination))}">${inline(part(chars, i + 1, close), link)}</a>`
+                    i = end + 1
+                    continue
+                }
+            }
+        }
+
+        if (c == '<' and (startsWithAt(chars, i + 1, 'https://') or startsWithAt(chars, i + 1, 'http://'))) {
+            immut end = urlEnd(chars, i + 1)
+
+            if (end < chars.length() and chars[end] == '>') {
+                immut url = part(chars, i + 1, end)
+                html += `<a href="${escape(url)}">${escape(url)}</a>`
+                i = end + 1
+                continue
+            }
+        }
+
+        if ((startsWithAt(chars, i, 'https://') or startsWithAt(chars, i, 'http://')) and (i == 0 or not isWordChar(chars[i - 1]))) {
+            immut end = urlEnd(chars, i)
+            immut url = part(chars, i, end)
+            html += `<a href="${escape(url)}">${escape(url)}</a>`
+            i = end
+            continue
+        }
+
+        html += escape(string(c))
+        i += 1
+    }
+
+    return html
+}
+
+function same(link: string): string {
+    return link
+}
+
+function html(text: string): string {
+    return render(text, same).html
+}
+
+test 'inline' {
+    assert(inline('a `b < c` **d** *e* _f_ snake_case_name', same) == 'a <code>b &lt; c</code> <strong>d</strong> <em>e</em> <em>f</em> snake_case_name')
+    assert(inline('``a ` b`` and \\*not\\*', same) == '<code>a ` b</code> and *not*')
+    assert(inline('**`code` in bold** and 2 * 3 * 4', same) == '<strong><code>code</code> in bold</strong> and 2 * 3 * 4')
+    assert(inline('see [the `file` module](file.md#open) and https://example.com.', same) == 'see <a href="file.md#open">the <code>file</code> module</a> and <a href="https://example.com">https://example.com</a>.')
+    assert(inline('`function first[T](items: T[])`', same) == '<code>function first[T](items: T[])</code>')
+}
+
+test 'links go through the function' {
+    assert(inline('[a](b.md)', (destination: string) => destination.replace('.md', '.html')) == '<a href="b.html">a</a>')
+}
+
+test 'headings' {
+    immut document = render('# The `file` Module\n\n## Example\n\n## Example\n\n### Map and Set Methods', same)
+    assert(document.title == 'The file Module', document.title)
+    assert(document.headings[1].id == 'example' and document.headings[2].id == 'example-1')
+    assert(document.headings[3].id == 'map-and-set-methods')
+    assert(document.html.startsWith('<h1 id="the-file-module"><a class="anchor" href="#the-file-module" aria-hidden="true">#</a>The <code>file</code> Module</h1>'), document.html)
+}
+
+test 'paragraphs and breaks' {
+    assert(html('one\ntwo  \nthree\n\nfour') == '<p>one\ntwo<br>\nthree</p>\n<p>four</p>\n', html('one\ntwo  \nthree\n\nfour'))
+}
+
+test 'code' {
+    assert(html('```koji\nimmut a = 1\n```') == '<pre><code class="language-koji"><span class="k-keyword">immut</span> a = <span class="k-number">1</span></code></pre>\n')
+    assert(html('```\n<b>\n\n```') == '<pre><code>&lt;b&gt;\n</code></pre>\n')
+}
+
+test 'lists' {
+    assert(html('-   a\n-   b\n    still b\n-   c') == '<ul>\n<li>a</li>\n<li>b\nstill b</li>\n<li>c</li>\n</ul>\n', html('-   a\n-   b\n    still b\n-   c'))
+    assert(html('1. a\n2. b') == '<ol>\n<li>a</li>\n<li>b</li>\n</ol>\n')
+    assert(html('3. a') == '<ol start="3">\n<li>a</li>\n</ol>\n')
+    // Loose: a blank line between the blocks of an item.
+    immut loose = html('-   `open()`  \n    Opens.\n\n    ```koji\n    x\n    ```\n\n-   b')
+    assert(loose == '<ul>\n<li><p><code>open()</code><br>\nOpens.</p>\n<pre><code class="language-koji">x</code></pre></li>\n<li><p>b</p></li>\n</ul>\n', loose)
+    // Nested.
+    immut nested = html('-   a\n    -   b\n-   c')
+    assert(nested == '<ul>\n<li>a\n<ul>\n<li>b</li>\n</ul></li>\n<li>c</li>\n</ul>\n', nested)
+}
+
+test 'tables' {
+    immut table = html('| a | b |\n| :-- | --: |\n| `x | y` | 2 |')
+    assert(table == '<div class="table"><table>\n<thead>\n<tr><th style="text-align: left">a</th><th style="text-align: right">b</th></tr>\n</thead>\n<tbody>\n<tr><td style="text-align: left"><code>x | y</code></td><td style="text-align: right">2</td></tr>\n</tbody>\n</table></div>\n', table)
+}
+
+test 'quotes, alerts and rules' {
+    assert(html('> a\n> b\n\n---') == '<blockquote>\n<p>a\nb</p>\n</blockquote>\n<hr>\n')
+    assert(html('> [!WARNING]\n> Careful.') == '<div class="alert alert-warning"><p class="alert-title">Warning</p>\n<p>Careful.</p>\n</div>\n')
+}
+
+test 'html in the text is text' {
+    assert(html('a <b> & c') == '<p>a &lt;b&gt; &amp; c</p>\n')
+}

@@ -1,0 +1,214 @@
+// The colors of the code of Koji in the pages: the text of a program as HTML, with each word,
+// string, number and comment in a span whose class says what it is (`k-keyword`, `k-string`, ...),
+// as the grammar of editors/textmate in the repository of Koji colors it.
+
+import { escape, part } from 'text.kj'
+
+immut keywords = Set.from(['function', 'type', 'opaque', 'extern', 'foreign', 'blocking', 'mut', 'immut', 'take', 'if', 'else', 'for', 'in', 'while', 'match', 'break', 'continue', 'return', 'default', 'fallthrough', 'import', 'export', 'from', 'and', 'or', 'not', 'is', 'self'])
+immut constants = Set.from(['true', 'false', 'Some', 'None', 'Ok', 'Err'])
+immut types = Set.from(['int', 'float', 'decimal', 'string', 'char', 'byte', 'boolean', 'void'])
+
+function span(kind: string, text: string): string {
+    return `<span class="k-${kind}">${escape(text)}</span>`
+}
+
+function isDigit(c: char): boolean {
+    return c >= '0' and c <= '9'
+}
+
+function startsName(c: char): boolean {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_'
+}
+
+function continuesName(c: char): boolean {
+    return startsName(c) or isDigit(c)
+}
+
+// Where the string that starts at `start` (with its quote) ends: after its closing quote, or at the
+// end of the line when it has none.
+function stringEnd(chars: char[], start: int): int {
+    immut quote = chars[start]
+    mut i = start + 1
+
+    while (i < chars.length()) {
+        if (chars[i] == '\\') {
+            i += 2
+            continue
+        }
+
+        if (chars[i] == quote) { return i + 1 }
+
+        if (chars[i] == '\n') { return i }
+
+        i += 1
+    }
+
+    return chars.length()
+}
+
+// Adds to `html` the template (`...`) that starts at `start`: its text as strings, and the code of
+// each `${...}` colored as code. Returns where the template ends.
+function template(chars: char[], start: int, mut html: string): int {
+    mut i = start + 1
+    mut begin = start
+
+    while (i < chars.length()) {
+        if (chars[i] == '\\') {
+            i += 2
+            continue
+        }
+
+        if (chars[i] == '`') {
+            html += span('string', part(chars, begin, i + 1))
+            return i + 1
+        }
+
+        if (chars[i] == '$' and i + 1 < chars.length() and chars[i + 1] == '{') {
+            html += span('string', part(chars, begin, i))
+            // The code, to the brace that closes it.
+            mut depth = 1
+            mut end = i + 2
+
+            while (end < chars.length() and depth > 0) {
+                if (chars[end] == '{') { depth += 1 }
+
+                if (chars[end] == '}') { depth -= 1 }
+
+                if (depth > 0) { end += 1 }
+            }
+
+            html += span('interpolation', '${')
+            html += highlight(part(chars, i + 2, end))
+
+            if (end < chars.length()) { html += span('interpolation', '}') }
+
+            i = end + 1
+            begin = i
+            continue
+        }
+
+        i += 1
+    }
+
+    html += span('string', part(chars, begin, chars.length()))
+    return chars.length()
+}
+
+// The code of Koji `code` as HTML, colored.
+export function highlight(code: string): string {
+    immut chars = code.chars()
+    mut html = ''
+    mut i = 0
+    // Whether only spaces come before `i` on its line (`test` is a word only at the start of one).
+    mut lineStart = true
+
+    while (i < chars.length()) {
+        immut c = chars[i]
+
+        if (c == '/' and i + 1 < chars.length() and chars[i + 1] == '/') {
+            mut end = i
+
+            while (end < chars.length() and chars[end] != '\n') {
+                end += 1
+            }
+
+            html += span('comment', part(chars, i, end))
+            i = end
+            continue
+        }
+
+        if (c == '\'' or c == '"') {
+            immut end = stringEnd(chars, i)
+            html += span('string', part(chars, i, end))
+            i = end
+            lineStart = false
+            continue
+        }
+
+        if (c == '`') {
+            i = template(chars, i, mut html)
+            lineStart = false
+            continue
+        }
+
+        if (isDigit(c)) {
+            mut end = i + 1
+
+            // Digits, letters (0x1F, 1e9) and a point followed by a digit (not `..` of a range).
+            while (end < chars.length() and (continuesName(chars[end]) or (chars[end] == '.' and end + 1 < chars.length() and isDigit(chars[end + 1])))) {
+                end += 1
+            }
+
+            html += span('number', part(chars, i, end))
+            i = end
+            lineStart = false
+            continue
+        }
+
+        if (startsName(c)) {
+            mut end = i + 1
+
+            while (end < chars.length() and continuesName(chars[end])) {
+                end += 1
+            }
+
+            immut word = part(chars, i, end)
+            mut next = end
+
+            while (next < chars.length() and chars[next] == ' ') {
+                next += 1
+            }
+
+            immut called = next < chars.length() and chars[next] == '('
+            immut first = word.chars()[0]
+            mut kind = ''
+
+            if (word in keywords or (word == 'test' and lineStart and next < chars.length() and (chars[next] == '\'' or chars[next] == '"'))) { kind = 'keyword' }
+
+            if (kind == '' and word in constants) { kind = 'constant' }
+
+            if (kind == '' and (word in types or (first >= 'A' and first <= 'Z'))) { kind = 'type' }
+
+            if (kind == '' and called) { kind = 'function' }
+
+            html += if (kind == '') { escape(word) } else { span(kind, word) }
+            i = end
+            lineStart = false
+            continue
+        }
+
+        if (c == '\n') { lineStart = true }
+
+        if (c != ' ' and c != '\t' and c != '\n') { lineStart = false }
+
+        html += escape(string(c))
+        i += 1
+    }
+
+    return html
+}
+
+test 'words' {
+    assert(highlight('immut n = int(text)?') == '<span class="k-keyword">immut</span> n = <span class="k-type">int</span>(text)?')
+    assert(highlight('print(area(Circle(2)))') == '<span class="k-function">print</span>(<span class="k-function">area</span>(<span class="k-type">Circle</span>(<span class="k-number">2</span>)))')
+    assert(highlight('return Ok(n / 2)') == '<span class="k-keyword">return</span> <span class="k-constant">Ok</span>(n / <span class="k-number">2</span>)')
+}
+
+test 'strings and comments' {
+    assert(highlight('x = \'a < b\' // it\'s') == 'x = <span class="k-string">\'a &lt; b\'</span> <span class="k-comment">// it\'s</span>')
+    assert(highlight('\'it\\\'s\'') == '<span class="k-string">\'it\\\'s\'</span>')
+}
+
+test 'templates' {
+    assert(highlight('`a ${b + 1} c`') == '<span class="k-string">`a </span><span class="k-interpolation">${</span>b + <span class="k-number">1</span><span class="k-interpolation">}</span><span class="k-string"> c`</span>')
+}
+
+test 'numbers and ranges' {
+    assert(highlight('0..10') == '<span class="k-number">0</span>..<span class="k-number">10</span>')
+    assert(highlight('3.14 0x1F') == '<span class="k-number">3.14</span> <span class="k-number">0x1F</span>')
+}
+
+test 'test is a word only at the start of a line' {
+    assert(highlight('test \'sum\' {') == '<span class="k-keyword">test</span> <span class="k-string">\'sum\'</span> {')
+    assert(highlight('immut test = 3') == '<span class="k-keyword">immut</span> test = <span class="k-number">3</span>')
+}

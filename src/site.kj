@@ -1,0 +1,426 @@
+// Writes the website of Koji: its own pages (templates/, pages/, static/), and the documentation of
+// a version of Koji (doc/ in its repository) as HTML, with the navigation of doc/README.md.
+//
+//     kojic run src/site.kj <a checkout of the repository of Koji> <the directory to write>
+//
+// Every link of the pages written is then checked: a link to a page or to a heading that is not
+// there stops it, with the links that are broken (the site is not published with them).
+
+import file
+import path
+import system
+import { highlight } from 'highlight.kj'
+import { render } from 'markdown.kj'
+import { escape } from 'text.kj'
+
+immut repository = 'https://github.com/koji-language/koji'
+
+// An entry of the navigation of the documentation: a page of doc/ (`file.md`,
+// `standard-library/json.md`), at level 0, or at level 1 under the entry before it.
+type Entry = {
+    title: string
+    page: string
+    level: int
+}
+
+type Section = {
+    title: string
+    entries: Entry[]
+}
+
+// A page written: its path in the site, and its HTML.
+type Written = {
+    path: string
+    html: string
+}
+
+function readFile(name: string): string {
+    return match (file.open(name, file.Read)) {
+        Ok(opened) => match (opened.read()) {
+            Ok(text) => text
+            Err(error) => panic(`${name}: ${error}`)
+        }
+        Err(error) => panic(`${name}: ${error}`)
+    }
+}
+
+function writeFile(name: string, text: string) {
+    match (path.parent(name)) {
+        Some(directory) => match (file.createDir(directory)) {
+            Ok(_) => {}
+            Err(error) => panic(`${directory}: ${error}`)
+        }
+        None => {}
+    }
+
+    match (file.open(name, file.Write)) {
+        Ok(opened) => match (opened.write(text)) {
+            Ok(_) => {}
+            Err(error) => panic(`${name}: ${error}`)
+        }
+        Err(error) => panic(`${name}: ${error}`)
+    }
+}
+
+function listOf(directory: string): string[] {
+    return match (file.list(directory)) {
+        Ok(names) => names
+        Err(error) => panic(`${directory}: ${error}`)
+    }
+}
+
+// The version of Koji whose documentation this is: that of the first section of its CHANGELOG.md
+// (`## 0.1.0 (preview)`).
+function versionOf(koji: string): string {
+    for line in readFile(path.join(koji, 'CHANGELOG.md')).split('\n') {
+        if (line.startsWith('## ')) { return line[3..].split(' ')[0] }
+    }
+
+    panic(`${koji}/CHANGELOG.md names no version`)
+}
+
+// The pages of doc/ (Markdown), by their path in doc/, in order.
+function pagesOf(doc: string, directory: string): string[] {
+    mut pages: string[] = []
+    immut here = if (directory == '') { doc } else { path.join(doc, directory) }
+
+    for name in listOf(here) {
+        immut relative = if (directory == '') { name } else { `${directory}/${name}` }
+
+        if (name.endsWith('.md')) {
+            pages.push(relative)
+            continue
+        }
+
+        if (file.list(path.join(here, name)) is Ok) { pages += pagesOf(doc, relative) }
+    }
+
+    return pages
+}
+
+// The destination of the link `[text](destination)` of Markdown.
+function destinationOf(line: string): string {
+    immut start = match (line.indexOf('](')) {
+        Some(at) => at + 2
+        None => panic(`no link in: ${line}`)
+    }
+
+    return line[start..].split(')')[0]
+}
+
+function titleOf(line: string): string {
+    immut start = match (line.indexOf('[')) {
+        Some(at) => at + 1
+        None => panic(`no link in: ${line}`)
+    }
+
+    return line[start..].split('](')[0]
+}
+
+// The navigation of the documentation: the sections (`### Basics`) of doc/README.md and the links of
+// each. The pages of the modules of the standard library (doc/standard-library/) go under the
+// page of the standard library, in order.
+function navigationOf(doc: string, pages: string[]): Section[] {
+    mut sections: Section[] = []
+
+    for line in readFile(path.join(doc, 'README.md')).split('\n') {
+        if (line.startsWith('### ')) {
+            sections.push({ title: line[4..].trim(), entries: [] })
+            continue
+        }
+
+        if (not line.startsWith('-   [') or sections.length() == 0) { continue }
+
+        immut page = destinationOf(line)
+        sections[sections.length() - 1].entries.push({ title: titleOf(line), page: page, level: 0 })
+
+        if (page != 'stdlib.md') { continue }
+
+        for module in pages {
+            if (not module.startsWith('standard-library/')) { continue }
+
+            immut title = render(readFile(path.join(doc, module)), (destination: string) => destination).title
+            sections[sections.length() - 1].entries.push({ title: title, page: module, level: 1 })
+        }
+    }
+
+    return sections
+}
+
+// The path `target`, relative to the directory `directory` (both with `/`), as a path from where
+// `directory` is relative to: `..` and `.` resolved. It starts with `../` when it leaves it.
+function resolve(directory: string, target: string): string {
+    mut parts: string[] = []
+
+    for part in (if (directory == '') { target } else { `${directory}/${target}` }).split('/') {
+        if (part == '.' or part == '') { continue }
+
+        if (part == '..' and parts.length() > 0 and parts[parts.length() - 1] != '..') {
+            parts.pop()
+            continue
+        }
+
+        parts.push(part)
+    }
+
+    return parts.join('/') + if (target.endsWith('/')) { '/' } else { '' }
+}
+
+function directoryOf(page: string): string {
+    immut parts = page.split('/')
+    return parts[0..parts.length() - 1].join('/')
+}
+
+// The path of the site of the page `page` of doc/.
+function outputOf(page: string): string {
+    immut name = if (page == 'README.md' or page.endsWith('/README.md')) { page[0..page.length() - 9] + 'index.md' } else { page }
+    return `docs/${name[0..name.length() - 3]}.html`
+}
+
+// From a page of the site at `output`, the way back to the root of the site (`../` for each
+// directory).
+function rootOf(output: string): string {
+    mut root = ''
+
+    for _ in range(output.split('/').length() - 1) {
+        root += '../'
+    }
+
+    return root
+}
+
+// Where a link written in the page `page` of doc/ goes on the site: a page of doc/ to its page
+// here, anything else of the repository (CHANGELOG.md, a directory) to GitHub, in the version
+// `tag`.
+function linkOf(page: string, destination: string, tag: string): string {
+    if (destination.indexOf('://') is Some or destination.startsWith('mailto:') or destination.startsWith('#')) { return destination }
+
+    immut parts = destination.split('#')
+    immut target = parts[0]
+    immut anchor = if (parts.length() > 1) { `#${parts[1]}` } else { '' }
+    immut resolved = resolve(directoryOf(page), target)
+
+    if (resolved.startsWith('../') or not target.endsWith('.md')) {
+        immut inRepository = if (resolved.startsWith('../')) { resolved[3..] } else { `doc/${resolved}` }
+        immut kind = if (target.endsWith('/')) { 'tree' } else { 'blob' }
+        return `${repository}/${kind}/${tag}/${inRepository}${anchor}`
+    }
+
+    // Relative still: from the page of `page` to that of `resolved`.
+    immut origin = outputOf(page)
+    return rootOf(origin) + outputOf(resolved) + anchor
+}
+
+function navigationHtml(sections: Section[], current: string, root: string): string {
+    mut html = ''
+
+    for section in sections {
+        html += `<p class="nav-section">${escape(section.title)}</p>\n<ul>\n`
+
+        for i in range(section.entries.length()) {
+            immut entry = section.entries[i]
+            immut mark = if (entry.page == current) { ' class="current" aria-current="page"' } else { '' }
+            immut nested = entry.level == 1
+            immut previousLevel = if (i > 0) { section.entries[i - 1].level } else { 0 }
+
+            if (nested and previousLevel == 0) { html += '<ul>\n' }
+
+            if (not nested and previousLevel == 1) { html += '</ul></li>\n' }
+
+            if (i > 0 and not nested and previousLevel == 0) { html += '</li>\n' }
+
+            if (i > 0 and nested and previousLevel == 1) { html += '</li>\n' }
+
+            html += `<li><a href="${root}${outputOf(entry.page)}"${mark}>${escape(entry.title)}</a>`
+        }
+
+        if (section.entries.length() > 0) {
+            html += '</li>\n'
+
+            if (section.entries[section.entries.length() - 1].level == 1) { html += '</ul></li>\n' }
+        }
+
+        html += '</ul>\n'
+    }
+
+    return html
+}
+
+// The page `template` (templates/page.html) with the values of its `{{names}}`; `content` last, so
+// that text of a page that looks like `{{name}}` is left as it is.
+function fill(template: string, values: Map[string, string], content: string): string {
+    mut html = template
+
+    for name in values {
+        html = html.replace(`{{${name}}}`, values[name])
+    }
+
+    return html.replace('{{content}}', content)
+}
+
+function header(root: string, active: string): string {
+    function item(href: string, name: string, key: string): string {
+        immut mark = if (key == active) { ' class="active"' } else { '' }
+        return `<a href="${href}"${mark}>${name}</a>`
+    }
+
+    return item(root + 'docs/index.html', 'Docs', 'docs') + item(root + 'download.html', 'Download', 'download') + `<a href="${repository}">GitHub</a>`
+}
+
+function pager(entries: Entry[], current: string, root: string): string {
+    mut html = ''
+
+    for i in range(entries.length()) {
+        if (entries[i].page != current) { continue }
+
+        if (i > 0) { html += `<a class="previous" href="${root}${outputOf(entries[i - 1].page)}"><span>Previous</span>${escape(entries[i - 1].title)}</a>` }
+
+        if (i + 1 < entries.length()) { html += `<a class="next" href="${root}${outputOf(entries[i + 1].page)}"><span>Next</span>${escape(entries[i + 1].title)}</a>` }
+    }
+
+    return html
+}
+
+// The ids of the elements of a page (`id="..."`).
+function idsOf(html: string): Set[string] {
+    mut ids: Set[string] = Set.from([])
+
+    for part in html.split(' id="')[1..] {
+        ids.add(part.split('"')[0])
+    }
+
+    return ids
+}
+
+// The links of a page to the site itself (`href="..."` that are not addresses of other sites) that
+// lead nowhere: to a page that is not written, or to an id it does not have.
+function brokenLinks(written: Written[], files: Set[string]): string[] {
+    mut ids: Map[string, Set[string]] = [:]
+
+    for page in written {
+        ids[page.path] = idsOf(page.html)
+    }
+
+    mut broken: string[] = []
+
+    for page in written {
+        for part in page.html.split('href="')[1..] {
+            immut destination = part.split('"')[0].replace('&amp;', '&')
+
+            if (destination.indexOf('://') is Some or destination.startsWith('mailto:')) { continue }
+
+            immut parts = destination.split('#')
+            immut target = if (parts[0] == '') { page.path } else { resolve(directoryOf(page.path), parts[0]) }
+
+            if (not (target in files)) {
+                broken.push(`${page.path}: ${destination}: no such page`)
+                continue
+            }
+
+            if (parts.length() > 1 and target in ids and not (parts[1] in ids[target])) { broken.push(`${page.path}: ${destination}: no such heading`) }
+        }
+    }
+
+    return broken
+}
+
+immut args = system.args()
+
+if (args.length() != 2) {
+    printError('usage: kojic run src/site.kj <the repository of Koji> <the directory to write>')
+    system.exit(2)
+}
+
+immut koji = args[0]
+immut out = args[1]
+immut doc = path.join(koji, 'doc')
+immut version = versionOf(koji)
+immut tag = `v${version}`
+immut release = `${repository}/releases/tag/${tag}`
+immut layout = readFile('templates/page.html')
+immut pages = pagesOf(doc, '')
+immut sections = navigationOf(doc, pages)
+mut entries: Entry[] = []
+
+for section in sections {
+    entries += section.entries
+}
+
+mut written: Written[] = []
+
+// The documentation.
+for page in pages {
+    immut output = outputOf(page)
+    immut root = rootOf(output)
+    immut document = render(readFile(path.join(doc, page)), (destination: string) => linkOf(page, destination, tag))
+    mut contents = ''
+
+    for heading in document.headings {
+        if (heading.level == 2) { contents += `<li><a href="#${heading.id}">${escape(heading.text)}</a></li>\n` }
+    }
+
+    immut values = [
+        'root': root,
+        'title': if (page == 'README.md') { 'Documentation · Koji' } else { `${escape(document.title)} · Koji` },
+        'version': version,
+        'header': header(root, 'docs'),
+        'kind': 'docs',
+        'navigation': navigationHtml(sections, page, root),
+        'contents': if (contents == '') { '' } else { `<p class="contents-title">On this page</p>\n<ul>\n${contents}</ul>\n` },
+        'pager': pager(entries, page, root),
+        'edit': `<a href="${repository}/edit/main/doc/${page}">Edit this page on GitHub</a>`,
+    ]
+    written.push({ path: output, html: fill(layout, values, document.html) })
+}
+
+// The pages of the site, with the version in place of `{{version}}`.
+for name in listOf('pages') {
+    if (not name.endsWith('.md')) { continue }
+
+    immut output = `${name[0..name.length() - 3]}.html`
+    immut text = readFile(path.join('pages', name)).replace('{{version}}', version).replace('{{release}}', release)
+    immut document = render(text, (destination: string) => destination)
+    immut values = [
+        'root': '',
+        'title': `${escape(document.title)} · Koji`,
+        'version': version,
+        'header': header('', name[0..name.length() - 3]),
+        'kind': 'page',
+        'navigation': '',
+        'contents': '',
+        'pager': '',
+        'edit': '',
+    ]
+    written.push({ path: output, html: fill(layout, values, document.html) })
+}
+
+// The home page: the example highlighted.
+immut home = readFile('templates/home.html')
+immut example = highlight(readFile('pages/example.kj').trim())
+immut homeValues = ['root': '', 'version': version, 'release': release, 'header': header('', 'home')]
+written.push({ path: 'index.html', html: fill(home, homeValues, example) })
+
+mut files: Set[string] = Set.from([])
+
+for page in written {
+    writeFile(path.join(out, page.path), page.html)
+    files.add(page.path)
+}
+
+for name in listOf('static') {
+    writeFile(path.join(out, name), readFile(path.join('static', name)))
+    files.add(name)
+}
+
+immut broken = brokenLinks(written, files)
+
+for line in broken {
+    printError(line)
+}
+
+if (broken.length() > 0) {
+    printError(`${broken.length()} broken links`)
+    system.exit(1)
+}
+
+print(`${written.length()} pages of Koji ${version} written to ${out}`)
