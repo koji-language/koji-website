@@ -1,12 +1,14 @@
 # Builds the site with the last release of Koji (its compiler, and the documentation of its tag), and
-# publishes it with GitHub Pages. It runs for each push to main, and by hand after a release of Koji
-# (Actions, Pages, Run workflow), to publish the documentation of the new version.
+# publishes it with GitHub Pages. It runs for each push to main, and every day, so that a new release
+# of Koji is on the site by the next day (or at once: Actions, Pages, Run workflow).
 name: Pages
 
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch:
 
 permissions:

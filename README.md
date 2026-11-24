@@ -35,5 +35,6 @@ of the documentation is that of `doc/README.md`.
 ## Publishing
 
 `.github/workflows/pages.yml` builds the site with the last release of Koji and publishes it with
-GitHub Pages, at each push to `main`. After a release of Koji, run it by hand (Actions, Pages, Run
-workflow) to publish the documentation of the new version.
+GitHub Pages, at each push to `main` and every day at 03:17 UTC: a new release of Koji is on the
+site by the next day. To publish it at once, run the workflow by hand (Actions, Pages, Run
+workflow).
