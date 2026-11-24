@@ -1,17 +1,19 @@
 :root {
-    --background: #fffdf9;
-    --surface: #f7f1e8;
-    --border: #e7dccd;
-    --text: #2b2118;
-    --muted: #6f6152;
-    --accent: #c2410c;
-    --accent-strong: #9a3412;
-    --on-accent: #fff7ed;
-    --code-background: #f4ede3;
-    --k-keyword: #9a3412;
+    --background: #fffcf4;
+    --surface: #fbf3e1;
+    --border: #eee1c3;
+    --text: #2e2617;
+    --muted: #6e6350;
+    --accent: #946200;
+    --accent-strong: #6f4a00;
+    --primary: #ffd372;
+    --primary-hover: #ffc64a;
+    --on-primary: #3a2a00;
+    --code-background: #f8f0dd;
+    --k-keyword: #9a5800;
     --k-string: #3f7a32;
-    --k-number: #9c5a06;
-    --k-comment: #8a7b6a;
+    --k-number: #a0521c;
+    --k-comment: #8a7d66;
     --k-type: #1f6f8b;
     --k-function: #6b3fa0;
     --k-constant: #b4235a;
@@ -22,19 +24,21 @@
 
 @media (prefers-color-scheme: dark) {
     :root {
-        --background: #17130f;
-        --surface: #211b15;
-        --border: #3a3027;
-        --text: #efe6da;
-        --muted: #b3a493;
-        --accent: #fb923c;
-        --accent-strong: #fdba74;
-        --on-accent: #1c1007;
-        --code-background: #1f1913;
-        --k-keyword: #fb923c;
+        --background: #18150e;
+        --surface: #221d13;
+        --border: #3a321f;
+        --text: #f1e9d8;
+        --muted: #b5a88d;
+        --accent: #ffd372;
+        --accent-strong: #ffe3a3;
+        --primary: #ffd372;
+        --primary-hover: #ffe08f;
+        --on-primary: #2a1f00;
+        --code-background: #1f1a11;
+        --k-keyword: #ffd372;
         --k-string: #a3d68c;
-        --k-number: #f5c06b;
-        --k-comment: #8f8170;
+        --k-number: #f5a96b;
+        --k-comment: #8f846d;
         --k-type: #7cc6de;
         --k-function: #c9a6f2;
         --k-constant: #f58fb4;
@@ -342,7 +346,7 @@ blockquote {
 .alert {
     margin: 16px 0;
     padding: 4px 16px;
-    border-left: 3px solid var(--accent);
+    border-left: 3px solid var(--primary);
     background: var(--surface);
     border-radius: 0 8px 8px 0;
 }
@@ -455,6 +459,13 @@ body.page .edit {
     padding: 72px 24px 56px;
 }
 
+.hero-logo {
+    display: block;
+    width: 96px;
+    height: 96px;
+    margin: 0 0 24px;
+}
+
 .hero h1 {
     margin: 0 0 16px;
     font-size: clamp(2.2rem, 5vw, 3.4rem);
@@ -491,15 +502,15 @@ body.page .edit {
 }
 
 .button.primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: var(--on-accent);
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--on-primary);
 }
 
 .button.primary:hover {
-    background: var(--accent-strong);
-    border-color: var(--accent-strong);
-    color: var(--on-accent);
+    background: var(--primary-hover);
+    border-color: var(--primary-hover);
+    color: var(--on-primary);
 }
 
 .note {
