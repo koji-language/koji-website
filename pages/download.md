@@ -26,6 +26,15 @@ On macOS, a downloaded `kojic` is quarantined: `xattr -d com.apple.quarantine ko
 
 Unpack `koji-{{version}}-windows-x64.zip`, add its directory to your `PATH`, and run `kojic version` in a new terminal.
 
+## Your editor
+
+For Visual Studio Code, install the extension **Koji** from the
+[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=koji-language.koji),
+or, for VSCodium, Cursor and other editors, from
+[Open VSX](https://open-vsx.org/extension/koji-language/koji): it colors the code and shows the
+errors, types and declarations of the language server of Koji (`kojic lsp`), which any editor that
+speaks the Language Server Protocol can use too.
+
 ## From the source
 
 Koji builds from its repository with nothing but `gzip` (PowerShell on Windows): the compiler builds itself from a seed of its own executables.
