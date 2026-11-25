@@ -27,7 +27,7 @@ there.
 | `src/highlight.kj` | The colors of the code of Koji. |
 | `templates/` | The HTML of the pages: `page.html` for the documentation and the other pages, `home.html` for the home page. |
 | `pages/` | The pages of the site in Markdown (`{{version}}` is the version of Koji), and the example of the home page. |
-| `static/` | The files copied as they are: the style and the icon. |
+| `static/` | The files copied as they are: the style, the icon, and the logo in all its versions (`static/brand/`, published at `brand/`). |
 
 The documentation itself is in the repository of Koji: to change it, change `doc/` there. The navigation
 of the documentation is that of `doc/README.md`.

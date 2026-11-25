@@ -69,6 +69,52 @@ function listOf(directory: string): string[] {
     }
 }
 
+// The files of `directory` and of the directories in it, by their paths in it, in order.
+function staticFiles(directory: string, prefix: string): string[] {
+    mut found: string[] = []
+
+    for name in listOf(directory) {
+        immut inner = path.join(directory, name)
+        immut relative = if (prefix == '') { name } else { `${prefix}/${name}` }
+
+        if (file.list(inner) is Ok) {
+            found += staticFiles(inner, relative)
+            continue
+        }
+
+        found.push(relative)
+    }
+
+    return found
+}
+
+// A file copied as it is (an image too): its bytes.
+function copyFile(source: string, target: string) {
+    immut bytes = match (file.open(source, file.Read)) {
+        Ok(opened) => match (opened.readBytes()) {
+            Ok(read) => read
+            Err(error) => panic(`${source}: ${error}`)
+        }
+        Err(error) => panic(`${source}: ${error}`)
+    }
+
+    match (path.parent(target)) {
+        Some(directory) => match (file.createDir(directory)) {
+            Ok(_) => {}
+            Err(error) => panic(`${directory}: ${error}`)
+        }
+        None => {}
+    }
+
+    match (file.open(target, file.Write)) {
+        Ok(opened) => match (opened.writeBytes(bytes)) {
+            Ok(_) => {}
+            Err(error) => panic(`${target}: ${error}`)
+        }
+        Err(error) => panic(`${target}: ${error}`)
+    }
+}
+
 // The version of Koji whose documentation this is: that of the first section of its CHANGELOG.md
 // (`## 0.1.0 (preview)`).
 function versionOf(koji: string): string {
@@ -407,8 +453,8 @@ for page in written {
     files.add(page.path)
 }
 
-for name in listOf('static') {
-    writeFile(path.join(out, name), readFile(path.join('static', name)))
+for name in staticFiles('static', '') {
+    copyFile(path.join('static', name), path.join(out, name))
     files.add(name)
 }
 
