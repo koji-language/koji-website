@@ -13,6 +13,7 @@ function area(shape: Shape): decimal {
 // Errors are values: `?` passes them on.
 function half(text: string): Result[int, ParseError] {
     immut n = int(text)?
+
     return Ok(n / 2)
 }
 
